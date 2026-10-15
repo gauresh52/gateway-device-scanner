@@ -1,118 +1,491 @@
-<!doctype html>
+
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Gateway Device Scanner</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Device Scanner</title>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
 <style>
-:root{color-scheme:dark;--bg:#0b1020;--panel:#121a2d;--line:#293650;--text:#eef4ff;--muted:#9eacc6;--accent:#75e0b3}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top,#1b2c4b 0,#0b1020 58%);font:15px system-ui,-apple-system,sans-serif;color:var(--text);min-height:100vh;padding:24px}
-main{max-width:760px;margin:0 auto}.top{display:flex;align-items:center;gap:12px;margin-bottom:20px}.logo{font-size:26px;background:#203b48;border:1px solid #356a66;border-radius:14px;padding:12px}h1{font-size:25px;margin:0}h2{font-size:18px;margin:0 0 12px}p{color:var(--muted);margin:5px 0 0}.panel{background:rgba(18,26,45,.96);border:1px solid var(--line);border-radius:18px;padding:20px;margin:14px 0;box-shadow:0 14px 38px #0003}
-label{display:block;color:#c5d1e8;font-size:13px;margin:0 0 7px}input,select{width:100%;background:#0b1222;color:var(--text);border:1px solid #34445f;border-radius:10px;padding:13px;font-size:15px;outline:none}button{border:0;border-radius:10px;padding:12px 16px;font-size:15px;font-weight:700;cursor:pointer;background:var(--accent);color:#08251c}button.secondary{background:#24324a;color:var(--text);border:1px solid #40516c}button:disabled{opacity:.5;cursor:wait}.row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:13px}#reader{width:100%;overflow:hidden;border-radius:12px}#reader video{border-radius:12px}.status{padding:13px;border-radius:10px;background:#0a1220;border:1px solid var(--line);margin-top:14px;white-space:pre-wrap;overflow-wrap:anywhere}.good{color:#75e0b3}.bad{color:#ff9f9f}.hint{font-size:13px;line-height:1.5}.small{font-size:12px}.hidden{display:none!important}
-@media(max-width:540px){body{padding:14px}.panel{padding:15px}h1{font-size:21px}.row{grid-template-columns:1fr}.row button{width:100%}}
-</style></head>
-<body><main>
-<div class="top"><div class="logo">▦</div><div><h1>Gateway Device Scanner</h1><p>Read printed device numbers with your camera or enter them manually.</p></div></div>
-<section class="panel" id="configPanel">
-<h2>Connect to your Google Sheet</h2>
-<label for="endpoint">Apps Script Web App URL ending in /exec</label><input id="endpoint" placeholder="https://script.google.com/macros/s/.../exec">
-<div style="margin-top:12px"><label for="token">Scanner access token</label><input id="token" type="password" placeholder="Paste the token you configured in Apps Script"></div>
-<div class="actions"><button onclick="connect()">Connect</button></div>
-<p class="hint">The URL and token stay in this tab only; they are not saved by this page.</p>
-</section>
-<section class="panel">
-<h2>1. Read the printed device number</h2><p class="hint" style="margin-bottom:14px">Allow camera access. Hold the printed serial label close, in focus, and well lit.</p>
-<video id="cameraVideo" autoplay muted playsinline style="display:block;width:100%;max-height:430px;object-fit:contain;background:#050914;border-radius:12px"></video><canvas id="ocrCanvas" class="hidden"></canvas><div class="actions"><button id="startBtn" onclick="startCamera()">Start camera</button><button id="ocrBtn" onclick="readPrintedText()" disabled>Read printed text</button><button class="secondary" onclick="stopCamera()">Stop camera</button></div><p class="hint">Hold the printed serial number close to the camera, keep it in focus, then click <b>Read printed text</b>. You can correct the result before adding it.</p>
-</section>
-<section class="panel">
-<h2>2. Confirm device number</h2>
-<label for="deviceId">Device serial number (check OCR result)</label><div class="row"><input id="deviceId" placeholder="e.g. 101DA005000001" autocomplete="off"><button id="addBtn" onclick="submitDevice()">Add to sheet</button></div>
-<div style="margin-top:14px"><label for="deviceType">Device column (auto-detected where possible)</label><select id="deviceType"><option value="">Auto-detect by first 4 characters</option></select></div>
-<div class="status" id="status">Enter the Apps Script URL and token, then click Connect.</div>
-</section>
-<p class="hint">Duplicate IDs are blocked. Prefixes 1001 and 1027 are ambiguous in the current sheet, so select the exact model column for those devices.</p>
+:root {
+  color-scheme: dark;
+  --bg: #080d1b;
+  --panel: #111b30;
+  --border: #30415d;
+  --text: #eaf0ff;
+  --muted: #a8b4cb;
+  --green: #70e0b4;
+  --red: #ff999f;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 18px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+main { max-width: 760px; margin: auto; }
+h1 { font-size: 27px; margin: 8px 0; }
+h2 { font-size: 21px; margin: 0 0 20px; }
+p { color: var(--muted); line-height: 1.55; }
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  padding: 22px;
+  margin: 18px 0;
+}
+label {
+  display: block;
+  margin: 16px 0 9px;
+  color: #c8d2e5;
+}
+input, select, button {
+  width: 100%;
+  min-height: 54px;
+  border-radius: 15px;
+  border: 1px solid var(--border);
+  font: inherit;
+  font-size: 16px;
+}
+input, select {
+  padding: 13px;
+  color: var(--text);
+  background: #091122;
+}
+button {
+  padding: 12px 15px;
+  font-weight: 700;
+  cursor: pointer;
+  margin: 7px 0;
+}
+button:disabled { opacity: .55; cursor: wait; }
+.primary { background: var(--green); color: #06271e; border: 0; }
+.secondary { background: #263650; color: var(--text); }
+video {
+  width: 100%;
+  max-height: 440px;
+  object-fit: contain;
+  background: #050914;
+  border-radius: 16px;
+  margin: 10px 0;
+}
+.status {
+  margin-top: 16px;
+  padding: 14px;
+  background: #091122;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.status.error { color: var(--red); }
+.status.success { color: var(--green); }
+.small { font-size: 13px; }
+</style>
+</head>
+
+<body>
+<main>
+  <h1>Device Scanner</h1>
+  <p>Scan a printed device serial number and add it to the correct spreadsheet column.</p>
+
+  <section class="panel">
+    <h2>1. Scan the printed serial</h2>
+    <video id="video" autoplay playsinline muted></video>
+
+    <button class="primary" id="startCamera">Start camera</button>
+    <button class="secondary" id="readText">Read printed text</button>
+    <button class="secondary" id="stopCamera">Stop camera</button>
+
+    <p class="small">Keep the printed serial in focus and fill the camera view with the serial number. Check the OCR result before adding it.</p>
+    <div id="ocrStatus" class="status">Camera is stopped.</div>
+  </section>
+
+  <section class="panel">
+    <h2>2. Confirm device number</h2>
+
+    <label for="deviceId">Device serial number</label>
+    <input id="deviceId" type="text" placeholder="e.g. 101DA005000001"
+           autocomplete="off" autocapitalize="characters" spellcheck="false">
+
+    <label for="deviceColumn">Device column</label>
+    <select id="deviceColumn">
+      <option value="">Loading spreadsheet columns…</option>
+    </select>
+
+    <button class="primary" id="addDevice">Add to sheet</button>
+    <button class="secondary" id="reloadColumns">Reload spreadsheet columns</button>
+
+    <div id="addStatus" class="status">Connecting to Google Sheets…</div>
+  </section>
+
+  <p class="small">
+    Duplicate IDs are blocked. For ambiguous prefixes such as 1001 and 1027,
+    select the exact device column manually.
+  </p>
 </main>
+
 <script>
-let cameraStream=null,connected=false,requestNo=0,deviceHeaders=[],ocrBusy=false;
-const $=id=>document.getElementById(id);
-function show(msg,good=true){$('status').textContent=msg;$('status').className='status '+(good?'good':'bad')}
-function endpoint(){return $('endpoint').value.trim().replace(/\/+$/,'')}
-function jsonp(params){
- return new Promise((resolve,reject)=>{
-   const cb='scannerCallback'+(++requestNo);
-   const script=document.createElement('script');
-   const timer=setTimeout(()=>{cleanup();reject(new Error('Request timed out. Check the Apps Script URL and deployment access.'))},15000);
-   function cleanup(){clearTimeout(timer);delete window[cb];script.remove()}
-   window[cb]=data=>{cleanup();resolve(data)};
-   params.callback=cb;
-   script.onerror=()=>{cleanup();reject(new Error('Could not reach Apps Script. Check URL/deployment.'))};
-   script.src=endpoint()+'?'+new URLSearchParams(params).toString();
-   document.body.appendChild(script);
- });
+/* =========================================================
+   CONFIGURATION: CHANGE THESE TWO VALUES
+   ========================================================= */
+
+const SCRIPT_URL = "PASTE_YOUR_APPS_SCRIPT_EXEC_URL_HERE";
+const SCANNER_TOKEN = "PASTE_YOUR_EXACT_16_CHARACTER_TOKEN_HERE";
+
+/* ========================================================= */
+
+const PREFIX_TO_HEADER = {
+  "1038": "Zeon",
+  "103A": "Kreo",
+  "1034": "FP_Halo",
+  "1015": "FP_3_in_1",
+  "1018": "Mesh Io"
+};
+
+const AMBIGUOUS_PREFIXES = ["1001", "1027"];
+
+const video = document.getElementById("video");
+const deviceInput = document.getElementById("deviceId");
+const columnSelect = document.getElementById("deviceColumn");
+const addButton = document.getElementById("addDevice");
+const addStatus = document.getElementById("addStatus");
+const ocrStatus = document.getElementById("ocrStatus");
+
+let cameraStream = null;
+let worker = null;
+let busy = false;
+
+function setStatus(element, message, type = "") {
+  element.textContent = message;
+  element.className = "status" + (type ? " " + type : "");
 }
-async function connect(){
- if(!endpoint()||!$('token').value.trim()){show('Enter both the Apps Script /exec URL and access token.',false);return}
- try{
-  show('Connecting to spreadsheet…');
-  const res=await jsonp({action:'headers',token:$('token').value.trim()});
-  if(!res.ok)throw new Error(res.message||'Connection failed');
-  deviceHeaders=res.headers||[];
-  $('deviceType').innerHTML='<option value="">Auto-detect by first 4 characters</option>';
-  deviceHeaders.forEach(h=>{const o=document.createElement('option');o.value=h;o.textContent=h;$('deviceType').appendChild(o)});
-  connected=true;show('Connected. Found '+deviceHeaders.length+' device columns. You can scan now.');
- }catch(e){connected=false;show(e.message||String(e),false)}
+
+function validateConfiguration() {
+  if (!SCRIPT_URL.startsWith("https://script.google.com/") ||
+      !SCRIPT_URL.endsWith("/exec")) {
+    throw new Error("Set SCRIPT_URL to your deployed Apps Script URL ending in /exec.");
+  }
+
+  if (!SCANNER_TOKEN || SCANNER_TOKEN.startsWith("PASTE_")) {
+    throw new Error("Set SCANNER_TOKEN in index.html before using the scanner.");
+  }
 }
-async function startCamera(){
- if(cameraStream)return;
- try{
-  if(!window.isSecureContext)throw new Error('Camera needs HTTPS. Open the GitHub Pages https:// URL.');
-  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)throw new Error('This browser does not expose camera access.');
-  cameraStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}},audio:false});
-  $('cameraVideo').srcObject=cameraStream;
-  await $('cameraVideo').play();
-  $('startBtn').disabled=true;$('ocrBtn').disabled=false;
-  show('Camera is on. Move the printed serial number close to the camera, then click Read printed text.');
- }catch(e){cameraStream=null;$('startBtn').disabled=false;$('ocrBtn').disabled=true;show('Camera could not start: '+(e.message||e),false)}
-}
-function stopCamera(){
- if(cameraStream){cameraStream.getTracks().forEach(t=>t.stop());cameraStream=null}
- $('cameraVideo').srcObject=null;$('startBtn').disabled=false;$('ocrBtn').disabled=true;
-}
-async function readPrintedText(){
- if(!cameraStream){show('Start the camera first.',false);return}
- if(ocrBusy)return;
- const video=$('cameraVideo');
- if(!video.videoWidth){show('Camera is not ready yet. Wait a second and try again.',false);return}
- ocrBusy=true;$('ocrBtn').disabled=true;show('Reading printed characters… Keep the label still.');
- try{
-  const canvas=$('ocrCanvas'),ctx=canvas.getContext('2d');
-  // Crop the central portion of the camera image and enlarge it to help small printed IDs.
-  const cropW=Math.floor(video.videoWidth*0.82),cropH=Math.floor(video.videoHeight*0.48);
-  const sx=Math.floor((video.videoWidth-cropW)/2),sy=Math.floor((video.videoHeight-cropH)/2);
-  canvas.width=cropW*2;canvas.height=cropH*2;
-  ctx.filter='grayscale(1) contrast(1.7) brightness(1.08)';
-  ctx.drawImage(video,sx,sy,cropW,cropH,0,0,canvas.width,canvas.height);
-  const result=await Tesseract.recognize(canvas,'eng',{
-   logger:m=>{if(m.status==='recognizing text')show('Reading printed characters… '+Math.round((m.progress||0)*100)+'%')}
+
+function jsonp(action, params = {}, timeoutMs = 15000) {
+  return new Promise((resolve, reject) => {
+    try {
+      validateConfiguration();
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    const callbackName =
+      "deviceScannerCallback_" +
+      Date.now() + "_" + Math.random().toString(36).slice(2);
+
+    const script = document.createElement("script");
+    const url = new URL(SCRIPT_URL);
+
+    url.searchParams.set("action", action);
+    url.searchParams.set("token", SCANNER_TOKEN);
+    url.searchParams.set("callback", callbackName);
+    url.searchParams.set("_", String(Date.now()));
+
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        url.searchParams.set(key, String(value));
+      }
+    });
+
+    let finished = false;
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      script.remove();
+      try {
+        delete window[callbackName];
+      } catch (_) {
+        window[callbackName] = undefined;
+      }
+    };
+
+    const finish = (callback, value) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      callback(value);
+    };
+
+    window[callbackName] = data => finish(resolve, data);
+
+    script.onerror = () => {
+      finish(reject, new Error(
+        "Could not reach Apps Script. Check the /exec URL, deployment access, and internet connection."
+      ));
+    };
+
+    const timer = setTimeout(() => {
+      finish(reject, new Error(
+        "Request timed out after " + (timeoutMs / 1000) +
+        " seconds. Apps Script did not return a response. Check the token and deployment."
+      ));
+    }, timeoutMs);
+
+    script.src = url.toString();
+    document.head.appendChild(script);
   });
-  const raw=(result.data.text||'').toUpperCase();
-  // Prefer long alphanumeric strings; remove punctuation/spacing that OCR often inserts.
-  const cleaned=raw.replace(/[^A-Z0-9]/g,' ');
-  const candidates=cleaned.split(/\s+/).filter(s=>s.length>=8 && /[A-Z]/.test(s) && /[0-9]/.test(s));
-  let candidate=candidates.sort((a,b)=>b.length-a.length)[0]||'';
-  if(!candidate){
-   const compact=raw.replace(/[^A-Z0-9]/g,'');
-   const match=compact.match(/[A-Z0-9]{8,}/g);
-   candidate=match?match.sort((a,b)=>b.length-a.length)[0]:'';
-  }
-  if(candidate){
-   $('deviceId').value=candidate;
-   show('Text detected: '+candidate+'\nPlease verify the characters carefully before clicking Add to sheet.');
-  }else{
-   show('Could not confidently read a long serial number. Move the label closer, improve lighting, hold still, and click Read printed text again.\nOCR result: '+(raw.trim()||'(no text detected)'),false);
-  }
- }catch(e){show('Text recognition failed: '+(e.message||e),false)}
- finally{ocrBusy=false;$('ocrBtn').disabled=!cameraStream}
 }
-$('deviceId').addEventListener('keydown',e=>{if(e.key==='Enter')submitDevice()});
-</script></body></html>
+
+async function loadColumns() {
+  columnSelect.innerHTML = '<option value="">Loading columns…</option>';
+  setStatus(addStatus, "Connecting to Google Sheets…");
+
+  try {
+    const result = await jsonp("headers");
+
+    if (!result || !result.ok) {
+      throw new Error(result?.message || "Apps Script returned an invalid response.");
+    }
+
+    const headers = result.headers || [];
+    columnSelect.innerHTML = "";
+
+    const autoOption = document.createElement("option");
+    autoOption.value = "";
+    autoOption.textContent = "Auto-detect by first 4 characters";
+    columnSelect.appendChild(autoOption);
+
+    headers.forEach(header => {
+      const option = document.createElement("option");
+      option.value = header;
+      option.textContent = header;
+      columnSelect.appendChild(option);
+    });
+
+    setStatus(addStatus, "Connected. " + headers.length + " device columns loaded.", "success");
+  } catch (error) {
+    columnSelect.innerHTML = '<option value="">Could not load columns</option>';
+    setStatus(addStatus, "Connection error: " + error.message, "error");
+  }
+}
+
+function normalizeSerial(value) {
+  return String(value || "")
+    .toUpperCase()
+    .replace(/[\s\u200B-\u200D\uFEFF]/g, "")
+    .replace(/[^A-Z0-9_-]/g, "");
+}
+
+function updateColumnSuggestion() {
+  if (columnSelect.value) return;
+
+  const id = normalizeSerial(deviceInput.value);
+  const prefix = id.slice(0, 4);
+
+  if (AMBIGUOUS_PREFIXES.includes(prefix)) {
+    setStatus(addStatus,
+      "Prefix " + prefix + " is ambiguous. Select the correct device column before adding.");
+    return;
+  }
+
+  if (PREFIX_TO_HEADER[prefix]) {
+    const desired = PREFIX_TO_HEADER[prefix];
+    const exists = Array.from(columnSelect.options).some(o => o.value === desired);
+
+    if (exists) {
+      setStatus(addStatus, "Detected column: " + desired + ". Ready to add.");
+      return;
+    }
+  }
+
+  if (id.length >= 4) {
+    setStatus(addStatus,
+      "No automatic column mapping for prefix " + prefix +
+      ". Select the correct device column.");
+  }
+}
+
+deviceInput.addEventListener("input", updateColumnSuggestion);
+columnSelect.addEventListener("change", () => {
+  if (columnSelect.value) {
+    setStatus(addStatus, "Selected column: " + columnSelect.value);
+  }
+});
+
+async function addDevice() {
+  if (busy) return;
+
+  const id = normalizeSerial(deviceInput.value);
+  if (!id || id.length < 4) {
+    setStatus(addStatus, "Enter a valid device serial number first.", "error");
+    return;
+  }
+
+  let header = columnSelect.value;
+  const prefix = id.slice(0, 4);
+
+  if (!header) {
+    if (AMBIGUOUS_PREFIXES.includes(prefix)) {
+      setStatus(addStatus,
+        "Prefix " + prefix + " is ambiguous. Select the exact device column.", "error");
+      return;
+    }
+
+    header = PREFIX_TO_HEADER[prefix] || "";
+
+    if (!header) {
+      setStatus(addStatus,
+        "Prefix " + prefix + " is not mapped. Select the exact device column.", "error");
+      return;
+    }
+  }
+
+  busy = true;
+  addButton.disabled = true;
+  addButton.textContent = "Adding…";
+  setStatus(addStatus, "Sending " + id + " to Google Sheets…");
+
+  try {
+    const result = await jsonp("add", {
+      id: id,
+      header: header
+    }, 20000);
+
+    if (!result || !result.ok) {
+      if (result && result.duplicate) {
+        setStatus(addStatus, result.message || "This device already exists.", "error");
+      } else {
+        throw new Error(result?.message || "Apps Script rejected the request.");
+      }
+      return;
+    }
+
+    setStatus(addStatus,
+      "SUCCESS: " + (result.message || ("Added " + id + " to " + header)) +
+      "\nDevice: " + id +
+      "\nColumn: " + (result.header || header) +
+      (result.cell ? "\nCell: " + result.cell : ""),
+      "success"
+    );
+
+    deviceInput.value = "";
+    columnSelect.value = "";
+    deviceInput.focus();
+
+  } catch (error) {
+    setStatus(addStatus, "ADD FAILED: " + error.message, "error");
+  } finally {
+    busy = false;
+    addButton.disabled = false;
+    addButton.textContent = "Add to sheet";
+  }
+}
+
+addButton.addEventListener("click", addDevice);
+document.getElementById("reloadColumns").addEventListener("click", loadColumns);
+
+async function startCamera() {
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error("Camera access is unavailable. Open the HTTPS GitHub Pages website in Safari or Chrome.");
+    }
+
+    stopCamera();
+
+    cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: "environment" },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 }
+      },
+      audio: false
+    });
+
+    video.srcObject = cameraStream;
+    await video.play();
+
+    setStatus(ocrStatus, "Camera started. Focus on the printed serial, then tap Read printed text.", "success");
+  } catch (error) {
+    setStatus(ocrStatus, "Camera error: " + error.message, "error");
+  }
+}
+
+function stopCamera() {
+  if (cameraStream) {
+    cameraStream.getTracks().forEach(track => track.stop());
+    cameraStream = null;
+  }
+  video.srcObject = null;
+}
+
+document.getElementById("startCamera").addEventListener("click", startCamera);
+document.getElementById("stopCamera").addEventListener("click", () => {
+  stopCamera();
+  setStatus(ocrStatus, "Camera stopped.");
+});
+
+async function readPrintedText() {
+  if (!cameraStream || !video.videoWidth) {
+    setStatus(ocrStatus, "Start the camera first.", "error");
+    return;
+  }
+
+  const button = document.getElementById("readText");
+  button.disabled = true;
+  setStatus(ocrStatus, "Reading printed text… Keep the serial steady.");
+
+  try {
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    if (!worker) {
+      worker = await Tesseract.createWorker("eng");
+      await worker.setParameters({
+        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-"
+      });
+    }
+
+    const result = await worker.recognize(canvas);
+    const rawText = result.data.text || "";
+    const candidates = rawText
+      .toUpperCase()
+      .split(/[\s\n]+/)
+      .map(normalizeSerial)
+      .filter(text => text.length >= 10 && text.length <= 24);
+
+    if (!candidates.length) {
+      setStatus(ocrStatus,
+        "Could not confidently read a serial number. Move closer, improve focus and lighting, then try again.",
+        "error");
+      return;
+    }
+
+    deviceInput.value = candidates[0];
+    updateColumnSuggestion();
+
+    setStatus(ocrStatus,
+      "OCR result: " + candidates[0] +
+      "\nPlease check every character before tapping Add to sheet.",
+      "success");
+  } catch (error) {
+    setStatus(ocrStatus, "OCR failed: " + error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+document.getElementById("readText").addEventListener("click", readPrintedText);
+
+loadColumns();
+</script>
+</body>
+</html>
