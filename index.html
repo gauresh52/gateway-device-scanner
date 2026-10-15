@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -123,8 +122,9 @@ video {
   </section>
 
   <p class="small">
-    Duplicate IDs are blocked. For ambiguous prefixes such as 1001 and 1027,
-    select the exact device column manually.
+    Duplicate IDs are blocked. 1001 devices are detected by model suffix.
+    For unmapped serials or ambiguous prefixes such as 1027, select the exact device column manually.
+    Lowercase letters are automatically converted to uppercase.
   </p>
 </main>
 
@@ -143,10 +143,28 @@ const PREFIX_TO_HEADER = {
   "103A": "Kreo",
   "1034": "FP_Halo",
   "1015": "FP_3_in_1",
-  "1018": "Mesh Io"
+  "1018": "Mesh Io",
+  "101C": "Gateway",
+  "101D": "Gateway"
 };
 
-const AMBIGUOUS_PREFIXES = ["1001", "1027"];
+// 1001 devices are routed by their 4-character model suffix (positions 5–8).
+// 1027 remains ambiguous and must be selected manually.
+const UNO_832_SUFFIXES = new Set([
+  "A00E", "A012", "A013", "A014", "A015", "A01C", "A019", "A01A",
+  "A01B", "A020", "A022", "A023", "A024", "A025", "A02A", "A01D",
+  "A01F", "A021", "A016", "A017", "A018", "A01E", "A026", "A027",
+  "A028", "A029", "A02B", "A03A", "A02C", "A02D", "A02E", "A02F",
+  "A033", "A030", "A031", "A032", "A036"
+]);
+
+const UNO_840_SUFFIXES = new Set([
+  "A034", "A035", "A03E", "A037", "A039", "A03C", "A03F", "A038",
+  "A043", "A048", "A040", "A044", "A03B", "A03D", "A041", "A042",
+  "A049", "A04A", "A04B", "A04C", "A04D", "A046", "A047"
+]);
+
+const AMBIGUOUS_PREFIXES = ["1027"];
 
 const video = document.getElementById("video");
 const deviceInput = document.getElementById("deviceId");
@@ -281,29 +299,63 @@ function normalizeSerial(value) {
     .replace(/[^A-Z0-9_-]/g, "");
 }
 
-function updateColumnSuggestion() {
-  if (columnSelect.value) return;
-
-  const id = normalizeSerial(deviceInput.value);
+function detectHeader(id) {
   const prefix = id.slice(0, 4);
 
-  if (AMBIGUOUS_PREFIXES.includes(prefix)) {
-    setStatus(addStatus,
-      "Prefix " + prefix + " is ambiguous. Select the correct device column before adding.");
-    return;
+  if (prefix === "1001") {
+    // Serial suffix is the four characters immediately after prefix 1001.
+    const suffix = id.slice(4, 8);
+    if (UNO_832_SUFFIXES.has(suffix)) return "Uno_832";
+    if (UNO_840_SUFFIXES.has(suffix)) return "Uno_840";
+    return "";
   }
 
-  if (PREFIX_TO_HEADER[prefix]) {
-    const desired = PREFIX_TO_HEADER[prefix];
-    const exists = Array.from(columnSelect.options).some(o => o.value === desired);
+  if (AMBIGUOUS_PREFIXES.includes(prefix)) return "";
+  return PREFIX_TO_HEADER[prefix] || "";
+}
+
+function updateColumnSuggestion() {
+  const normalized = normalizeSerial(deviceInput.value);
+  if (deviceInput.value !== normalized) {
+    const cursor = deviceInput.selectionStart;
+    deviceInput.value = normalized;
+    try {
+      deviceInput.setSelectionRange(cursor, cursor);
+    } catch (_) {}
+  }
+
+  // A manual selection always takes precedence, but the serial still gets uppercased.
+  if (columnSelect.value) return;
+
+  const id = normalized;
+  const prefix = id.slice(0, 4);
+  if (id.length < 4) return;
+
+  const desired = detectHeader(id);
+  if (desired) {
+    const exists = Array.from(columnSelect.options).some(o =>
+      o.value.trim().toLowerCase().replace(/[\\s_-]/g, "") ===
+      desired.toLowerCase().replace(/[\\s_-]/g, "")
+    );
 
     if (exists) {
       setStatus(addStatus, "Detected column: " + desired + ". Ready to add.");
       return;
     }
+
+    setStatus(addStatus,
+      "Detected " + desired + ", but that column was not found in the spreadsheet headers. Check the header name.");
+    return;
   }
 
-  if (id.length >= 4) {
+  if (prefix === "1001") {
+    setStatus(addStatus,
+      "Could not identify the 1001 model suffix '" + id.slice(4, 8) +
+      "'. Select the correct device column manually.");
+  } else if (AMBIGUOUS_PREFIXES.includes(prefix)) {
+    setStatus(addStatus,
+      "Prefix " + prefix + " is ambiguous. Select the correct device column before adding.");
+  } else {
     setStatus(addStatus,
       "No automatic column mapping for prefix " + prefix +
       ". Select the correct device column.");
@@ -314,6 +366,8 @@ deviceInput.addEventListener("input", updateColumnSuggestion);
 columnSelect.addEventListener("change", () => {
   if (columnSelect.value) {
     setStatus(addStatus, "Selected column: " + columnSelect.value);
+  } else {
+    updateColumnSuggestion();
   }
 });
 
@@ -330,17 +384,13 @@ async function addDevice() {
   const prefix = id.slice(0, 4);
 
   if (!header) {
-    if (AMBIGUOUS_PREFIXES.includes(prefix)) {
-      setStatus(addStatus,
-        "Prefix " + prefix + " is ambiguous. Select the exact device column.", "error");
-      return;
-    }
-
-    header = PREFIX_TO_HEADER[prefix] || "";
+    header = detectHeader(id);
 
     if (!header) {
-      setStatus(addStatus,
-        "Prefix " + prefix + " is not mapped. Select the exact device column.", "error");
+      const reason = prefix === "1001"
+        ? "The 1001 model suffix '" + id.slice(4, 8) + "' is not mapped."
+        : "Prefix " + prefix + " is not mapped or is ambiguous.";
+      setStatus(addStatus, reason + " Select the exact device column.", "error");
       return;
     }
   }
