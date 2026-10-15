@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Gateway Device Scanner</title>
-<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <style>
 :root{color-scheme:dark;--bg:#0b1020;--panel:#121a2d;--line:#293650;--text:#eef4ff;--muted:#9eacc6;--accent:#75e0b3}
 *{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top,#1b2c4b 0,#0b1020 58%);font:15px system-ui,-apple-system,sans-serif;color:var(--text);min-height:100vh;padding:24px}
@@ -12,7 +12,7 @@ label{display:block;color:#c5d1e8;font-size:13px;margin:0 0 7px}input,select{wid
 @media(max-width:540px){body{padding:14px}.panel{padding:15px}h1{font-size:21px}.row{grid-template-columns:1fr}.row button{width:100%}}
 </style></head>
 <body><main>
-<div class="top"><div class="logo">▦</div><div><h1>Gateway Device Scanner</h1><p>Scan a device QR or enter its number to update Google Sheets.</p></div></div>
+<div class="top"><div class="logo">▦</div><div><h1>Gateway Device Scanner</h1><p>Read printed device numbers with your camera or enter them manually.</p></div></div>
 <section class="panel" id="configPanel">
 <h2>Connect to your Google Sheet</h2>
 <label for="endpoint">Apps Script Web App URL ending in /exec</label><input id="endpoint" placeholder="https://script.google.com/macros/s/.../exec">
@@ -21,19 +21,19 @@ label{display:block;color:#c5d1e8;font-size:13px;margin:0 0 7px}input,select{wid
 <p class="hint">The URL and token stay in this tab only; they are not saved by this page.</p>
 </section>
 <section class="panel">
-<h2>1. Scan QR with laptop camera</h2><p class="hint" style="margin-bottom:14px">Allow camera access when Chrome asks. Keep the QR steady inside the frame.</p>
-<div id="reader"></div><div class="actions"><button id="startBtn" onclick="startScan()">Start camera</button><button class="secondary" onclick="stopScan()">Stop camera</button></div>
+<h2>1. Read the printed device number</h2><p class="hint" style="margin-bottom:14px">Allow camera access. Hold the printed serial label close, in focus, and well lit.</p>
+<video id="cameraVideo" autoplay muted playsinline style="display:block;width:100%;max-height:430px;object-fit:contain;background:#050914;border-radius:12px"></video><canvas id="ocrCanvas" class="hidden"></canvas><div class="actions"><button id="startBtn" onclick="startCamera()">Start camera</button><button id="ocrBtn" onclick="readPrintedText()" disabled>Read printed text</button><button class="secondary" onclick="stopCamera()">Stop camera</button></div><p class="hint">Hold the printed serial number close to the camera, keep it in focus, then click <b>Read printed text</b>. You can correct the result before adding it.</p>
 </section>
 <section class="panel">
 <h2>2. Confirm device number</h2>
-<label for="deviceId">Device QR / serial number</label><div class="row"><input id="deviceId" placeholder="e.g. 1038A01A000007" autocomplete="off"><button id="addBtn" onclick="submitDevice()">Add to sheet</button></div>
+<label for="deviceId">Device serial number (check OCR result)</label><div class="row"><input id="deviceId" placeholder="e.g. 101DA005000001" autocomplete="off"><button id="addBtn" onclick="submitDevice()">Add to sheet</button></div>
 <div style="margin-top:14px"><label for="deviceType">Device column (auto-detected where possible)</label><select id="deviceType"><option value="">Auto-detect by first 4 characters</option></select></div>
 <div class="status" id="status">Enter the Apps Script URL and token, then click Connect.</div>
 </section>
 <p class="hint">Duplicate IDs are blocked. Prefixes 1001 and 1027 are ambiguous in the current sheet, so select the exact model column for those devices.</p>
 </main>
 <script>
-let scanner=null,scanning=false,connected=false,requestNo=0,lastText='',lastAt=0,deviceHeaders=[];
+let cameraStream=null,connected=false,requestNo=0,deviceHeaders=[],ocrBusy=false;
 const $=id=>document.getElementById(id);
 function show(msg,good=true){$('status').textContent=msg;$('status').className='status '+(good?'good':'bad')}
 function endpoint(){return $('endpoint').value.trim().replace(/\/+$/,'')}
@@ -62,40 +62,57 @@ async function connect(){
   connected=true;show('Connected. Found '+deviceHeaders.length+' device columns. You can scan now.');
  }catch(e){connected=false;show(e.message||String(e),false)}
 }
-async function startScan(){
- if(scanning)return;
+async function startCamera(){
+ if(cameraStream)return;
  try{
-  if(!window.isSecureContext)throw new Error('Camera needs HTTPS. Open this site through GitHub Pages (https://...), not a local file.');
+  if(!window.isSecureContext)throw new Error('Camera needs HTTPS. Open the GitHub Pages https:// URL.');
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)throw new Error('This browser does not expose camera access.');
-  // Ask for camera permission directly, which provides a clearer error than scanner library.
-  const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
-  stream.getTracks().forEach(t=>t.stop());
-  if(!scanner)scanner=new Html5Qrcode('reader');
-  const cams=await Html5Qrcode.getCameras();
-  if(!cams||!cams.length)throw new Error('No camera found.');
-  const cam=cams.find(c=>/back|rear|environment/i.test(c.label))||cams[0];
-  scanning=true;$('startBtn').disabled=true;
-  await scanner.start(cam.id,{fps:10,qrbox:{width:250,height:180}},text=>{
-   const now=Date.now();if(text===lastText&&now-lastAt<2500)return;
-   lastText=text;lastAt=now;$('deviceId').value=String(text).trim();
-   show('QR detected. Check the number, then click Add to sheet.');stopScan();
-  },()=>{});
-  show('Camera is on. Point the QR code at the frame.');
- }catch(e){scanning=false;$('startBtn').disabled=false;show('Camera could not start: '+(e.message||e),false)}
+  cameraStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}},audio:false});
+  $('cameraVideo').srcObject=cameraStream;
+  await $('cameraVideo').play();
+  $('startBtn').disabled=true;$('ocrBtn').disabled=false;
+  show('Camera is on. Move the printed serial number close to the camera, then click Read printed text.');
+ }catch(e){cameraStream=null;$('startBtn').disabled=false;$('ocrBtn').disabled=true;show('Camera could not start: '+(e.message||e),false)}
 }
-async function stopScan(){if(scanner&&scanning){try{await scanner.stop()}catch(e){}}scanning=false;$('startBtn').disabled=false}
-async function submitDevice(){
- const id=$('deviceId').value.trim(),header=$('deviceType').value;
- if(!id){show('Scan a QR or enter a device number first.',false);return}
- if(!connected){show('Connect to the spreadsheet first.',false);return}
- $('addBtn').disabled=true;show('Adding device to Google Sheet…');
+function stopCamera(){
+ if(cameraStream){cameraStream.getTracks().forEach(t=>t.stop());cameraStream=null}
+ $('cameraVideo').srcObject=null;$('startBtn').disabled=false;$('ocrBtn').disabled=true;
+}
+async function readPrintedText(){
+ if(!cameraStream){show('Start the camera first.',false);return}
+ if(ocrBusy)return;
+ const video=$('cameraVideo');
+ if(!video.videoWidth){show('Camera is not ready yet. Wait a second and try again.',false);return}
+ ocrBusy=true;$('ocrBtn').disabled=true;show('Reading printed characters… Keep the label still.');
  try{
-  const res=await jsonp({action:'add',token:$('token').value.trim(),id:id,header:header});
-  if(!res.ok){show((res.duplicate?'⚠ ':'')+(res.message||'Could not add device.'),false);return}
-  show('✓ '+res.message+'\nDevice: '+res.id+'\nPrefix: '+res.prefix);
-  $('deviceId').value='';$('deviceType').value='';
- }catch(e){show(e.message||String(e),false)}
- finally{$('addBtn').disabled=false}
+  const canvas=$('ocrCanvas'),ctx=canvas.getContext('2d');
+  // Crop the central portion of the camera image and enlarge it to help small printed IDs.
+  const cropW=Math.floor(video.videoWidth*0.82),cropH=Math.floor(video.videoHeight*0.48);
+  const sx=Math.floor((video.videoWidth-cropW)/2),sy=Math.floor((video.videoHeight-cropH)/2);
+  canvas.width=cropW*2;canvas.height=cropH*2;
+  ctx.filter='grayscale(1) contrast(1.7) brightness(1.08)';
+  ctx.drawImage(video,sx,sy,cropW,cropH,0,0,canvas.width,canvas.height);
+  const result=await Tesseract.recognize(canvas,'eng',{
+   logger:m=>{if(m.status==='recognizing text')show('Reading printed characters… '+Math.round((m.progress||0)*100)+'%')}
+  });
+  const raw=(result.data.text||'').toUpperCase();
+  // Prefer long alphanumeric strings; remove punctuation/spacing that OCR often inserts.
+  const cleaned=raw.replace(/[^A-Z0-9]/g,' ');
+  const candidates=cleaned.split(/\s+/).filter(s=>s.length>=8 && /[A-Z]/.test(s) && /[0-9]/.test(s));
+  let candidate=candidates.sort((a,b)=>b.length-a.length)[0]||'';
+  if(!candidate){
+   const compact=raw.replace(/[^A-Z0-9]/g,'');
+   const match=compact.match(/[A-Z0-9]{8,}/g);
+   candidate=match?match.sort((a,b)=>b.length-a.length)[0]:'';
+  }
+  if(candidate){
+   $('deviceId').value=candidate;
+   show('Text detected: '+candidate+'\nPlease verify the characters carefully before clicking Add to sheet.');
+  }else{
+   show('Could not confidently read a long serial number. Move the label closer, improve lighting, hold still, and click Read printed text again.\nOCR result: '+(raw.trim()||'(no text detected)'),false);
+  }
+ }catch(e){show('Text recognition failed: '+(e.message||e),false)}
+ finally{ocrBusy=false;$('ocrBtn').disabled=!cameraStream}
 }
 $('deviceId').addEventListener('keydown',e=>{if(e.key==='Enter')submitDevice()});
 </script></body></html>
